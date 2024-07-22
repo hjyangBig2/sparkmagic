@@ -175,7 +175,7 @@ class SparkMagicBase(Magics):
         else:
             return df
 
-    @staticmethod
+    @staticmethod  #静态方法方便类名.直接调用
     def _sqlquery(cell, samplemethod, maxrows, samplefraction, coerce):
         return SQLQuery(cell, samplemethod, maxrows, samplefraction, coerce=coerce)
 

@@ -35,6 +35,7 @@ from sparkmagic.livyclientlib.exceptions import (
     wrap_unexpected_exceptions,
     BadUserDataException,
 )
+from sparkmagic.yarn.table_auth import SparkSqlAuth
 
 
 def _event(f):
@@ -84,6 +85,9 @@ class KernelMagics(SparkMagicBase):
         if spark_events is None:
             spark_events = SparkEvents()
         self._spark_events = spark_events
+        self.yarn_checked = False  # 看是否检测成功，不成功不会进行下一步
+        self.yarn_control = False
+        self.auth_control = False
 
     @magic_arguments()
     @cell_magic
@@ -316,6 +320,16 @@ class KernelMagics(SparkMagicBase):
                 self._do_not_call_start_session("")
         else:
             self._override_session_settings(dictionary)
+
+        # todo 这里将查询到的参数将值给赋上
+        auth = SparkSqlAuth()
+        team_id_flag,team_id = auth.get_team_id()
+        #if not team_id_flag
+
+
+
+
+
         self.info("")
 
     @magic_arguments()
@@ -454,6 +468,17 @@ class KernelMagics(SparkMagicBase):
     @wrap_unexpected_exceptions
     @handle_expected_exceptions
     def sql(self, line, cell="", local_ns=None):
+        # todo  表权限入口
+        if not self.yarn_checked:
+            # 检查配额是否充足
+            self.ipython_display.send_error("用户配额检查未通过，请查看个人/团队资源是否充足！ ")
+            return
+        table_auth = SparkSqlAuth()
+        auth_check_flag = table_auth.sql_auth_check(sql=cell, auth_control=self.auth_control)
+
+        if not auth_check_flag:
+            return
+
         if not self._do_not_call_start_session(""):
             return
 

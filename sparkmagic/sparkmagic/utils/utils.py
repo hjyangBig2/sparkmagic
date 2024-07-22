@@ -67,6 +67,7 @@ def records_to_dataframe(records_text, kind, coerce=None):
         if kind == constants.SESSION_KIND_SPARKR and len(data_array) > 0:
             data_array = data_array[0]
 
+        #引入的pandas
         df = pd.DataFrame(data_array)
 
         if len(data_array) > 0:
