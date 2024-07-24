@@ -6,6 +6,10 @@ Provides the %spark magic."""
 
 from __future__ import print_function
 import json
+import logging
+import os
+
+import requests
 from IPython.core.magic import magics_class
 from IPython.core.magic import needs_local_scope, cell_magic, line_magic
 from IPython.core.magic_arguments import argument, magic_arguments
@@ -13,6 +17,7 @@ from hdijupyterutils.utils import generate_uuid
 import importlib
 
 import sparkmagic.utils.configuration as conf
+from sparkmagic.utils.config import *
 from sparkmagic.utils.configuration import get_livy_kind
 from sparkmagic.utils import constants
 from sparkmagic.utils.utils import (
@@ -36,6 +41,64 @@ from sparkmagic.livyclientlib.exceptions import (
     BadUserDataException,
 )
 from sparkmagic.yarn.table_auth import SparkSqlAuth
+
+
+
+
+INFO_DICT = {
+    "username": os.getenv("JUPYTERHUB_USER", "UnknownUser"),
+    "project_id": os.getenv("JUPYTERHUB_SERVER_NAME", "UnknownProject"),
+}
+
+
+def parse_resource(executor_memory: str):
+    if executor_memory.upper().endswith("G"):
+        return int(str(executor_memory)[:-1]) * 1024
+    elif executor_memory.upper().endswith("M"):
+        return int(str(executor_memory)[:-1])
+    else:
+        return 0
+
+
+def get_resource(yarn_dict: dict):
+    memory_units = ["G", "N"]
+    num_executors = str(yarn_dict.get("numExecutors", 2))
+    executor_memory = yarn_dict.get("executorMemory", "1G")
+    executor_cores = str(yarn_dict.get("executorCores", 1))
+    driver_memory = str(yarn_dict.get("driverMemory", "1G"))
+    driver_cores = yarn_dict.get("driverCores", 1)
+    if (executor_cores[-1] not in memory_units) or (driver_memory[-1 not in memory_units]):
+        return False, f"资源- executorMemory:{executor_memory} or  driverMemory:{driver_memory}: 不合法！"
+    if not (num_executors.isdigit() and executor_cores.isdigit() and driver_cores.is_integer()):
+        return False, f"资源- numExecutor:{num_executors} or  executorCores:{executor_cores} or  driverCores:{driver_cores}: 不合法！"
+
+    executor_memory = parse_resource(executor_memory)
+    driver_memory = parse_resource(driver_memory)
+    executor_cores = int(executor_cores)
+    num_executors = int(num_executors)
+    cpu_num = executor_cores * num_executors + driver_cores
+    memory_size = executor_memory * num_executors + driver_memory
+    memory_num = f"资源使用情况{memory_size}M"
+    return True, {'yarn_cpu':cpu_num, 'yarn_memory': memory_num}
+
+def resource_check(team_id: int, yarn_dict: dict):
+    try:
+        flag, resource = get_resource(yarn_dict)
+        if not flag:
+            return False, resource
+        url = CABT_URL + "/api/k8s/resource/check/"
+        INFO_DICT.update({"resource": resource})
+        params = {"teamId": team_id, "username": INFO_DICT['username'], "resource": json.dump(resource)}
+        res = requests.get(url=url, headers=HEADERS, timeout=COST_CENTER_TIMEOUT, params=params)
+        data = res.json()
+        if (res.status_code == 400) or ("用户配额检查失败" in data.get("msg", "")):
+            msg = "【yarn资源管控】【检查资源是否可用】【检查失败原因】:{0}".format(data.get("data", ""))
+            return False, msg
+        return True, "ok"
+    except Exception as e:
+        msg = "【yarn资源管控】【检查资源是否可用】【检查失败原因】：{0}".format(str(e))
+        logging.info(msg)
+        return False, msg
 
 
 def _event(f):
@@ -65,7 +128,6 @@ def _event(f):
     wrapped.__name__ = f.__name__
     wrapped.__doc__ = f.__doc__
     return wrapped
-
 
 @magics_class
 class KernelMagics(SparkMagicBase):
@@ -323,12 +385,24 @@ class KernelMagics(SparkMagicBase):
 
         # todo 这里将查询到的参数将值给赋上
         auth = SparkSqlAuth()
-        team_id_flag,team_id = auth.get_team_id()
-        #if not team_id_flag
-
-
-
-
+        team_id_flag, team_id = auth.get_team_id()
+        if not team_id_flag:
+            return
+        yarn_flag, yarn_control = auth.yarn_control_switch(team_id=team_id)
+        auth_flag, auth_control = auth.table_control_switch(team_id=team_id)
+        if (not yarn_flag) or (not auth_flag):
+            return
+        self.auth_control = auth_control
+        self.yarn_control = yarn_control
+        if self.yarn_control:
+            # 检测yarn资源的接口
+            check_flag, check_res = resource_check(team_id=team_id,yarn_dict=dictionary)
+            self.yarn_checked = check_flag
+            if not check_flag:
+                self.ipython_display.send_error(check_res)
+                return
+        else:
+            self.yarn_checked = True
 
         self.info("")
 
