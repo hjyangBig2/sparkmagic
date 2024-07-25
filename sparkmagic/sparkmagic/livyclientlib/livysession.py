@@ -179,6 +179,8 @@ class LivySession(ObjectWithGuid):
                     )
                 )
 
+           #todo 这里修改东西了
+
             html = get_sessions_info_html([self], self.id)
             self.ipython_display.html(html)
 
